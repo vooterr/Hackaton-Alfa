@@ -1,0 +1,81 @@
+import pandas as pd
+import numpy as np
+import re
+import datetime
+
+def detect_feature_type(s: pd.Series, binary_threshold=2, cat_threshold=20):
+    if pd.api.types.is_bool_dtype(s):
+        return "binary"
+    if pd.api.types.is_numeric_dtype(s):
+        uniq = s.nunique(dropna=True)
+        if uniq <= binary_threshold:
+            return "binary"
+        return "categorical" if uniq <= cat_threshold else "numeric"
+    return "categorical"
+
+def dt_to_days_from_2024(val):
+    if pd.isna(val):
+        return pd.NA
+    s = str(val).strip()
+    parts = re.split(r'[-._\s]', s)
+    if len(parts) != 3:
+        dt = pd.to_datetime(s, errors='coerce')
+        return pd.NA if pd.isna(dt) else (dt.date() - datetime.date(2024, 1, 1)).days
+    try:
+        y, w, d = [int(x) for x in parts]
+        date = datetime.date.fromisocalendar(y, w, d)
+    except Exception:
+        try:
+            date = datetime.date(y, w, d)
+        except Exception:
+            dt = pd.to_datetime(s, errors='coerce')
+            if pd.isna(dt):
+                return pd.NA
+            date = dt.date()
+    base = datetime.date(2024, 1, 1)
+    return (date - base).days
+
+def impute_dataset(df):
+    original_shape = df.shape
+    print(f"Исходный размер: {original_shape}")
+    
+    if 'dt' in df.columns:
+        df['dt'] = df['dt'].apply(dt_to_days_from_2024).astype('Int64')
+    
+    for column in df.select_dtypes(include=['object']).columns:
+        codes = df[column].astype('category').cat.codes
+        codes = codes.replace(-1, np.nan)
+        df[column] = codes.fillna(codes.mean())
+    
+    for col in df.columns:
+        ftype = detect_feature_type(df[col])
+        
+        if ftype == "numeric":
+            fill_value = df[col].median(skipna=True)
+            if pd.isna(fill_value):
+                fill_value = 0
+            df[col] = df[col].fillna(fill_value)
+        elif ftype == "binary":
+            mode = df[col].mode(dropna=True)
+            fill_value = mode.iloc[0] if not mode.empty else 0
+            df[col] = df[col].fillna(fill_value)
+        else:
+            mode = df[col].mode(dropna=True)
+            fill_value = mode.iloc[0] if not mode.empty else 0
+            df[col] = df[col].fillna(fill_value)
+    
+    final_shape = df.shape
+    print(f"Финальный размер: {final_shape}")
+    
+    if original_shape[0] != final_shape[0]:
+        print("ВНИМАНИЕ: Потеряны строки!")
+    else:
+        print("Все строки сохранены")
+    
+    return df
+
+df_test = pd.read_csv('hackathon_income_test.csv', delimiter=';', on_bad_lines='skip')
+print(f"Загружено строк: {len(df_test)}")
+
+df_test_processed = impute_dataset(df_test)
+df_test_processed.to_csv('hackathon_income_test_imputed.csv', index=False)
