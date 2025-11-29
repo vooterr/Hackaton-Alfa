@@ -1,0 +1,70 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.ensemble import RandomForestRegressor
+import shap
+
+print("Загрузка данных...")
+train = pd.read_csv('hackathon_income_train_imputed.csv')
+test = pd.read_csv('hackathon_income_test_imputed.csv')
+
+X_train = train.drop(columns=['target'])
+y_train = train['target']
+X_test = test
+
+common_cols = X_train.columns.intersection(X_test.columns)
+X_train = X_train[common_cols]
+X_test = X_test[common_cols]
+
+print("Обучение Random Forest...")
+rf = RandomForestRegressor(
+    n_estimators=100,
+    random_state=42,
+    n_jobs=-1,
+    max_depth=10
+)
+rf.fit(X_train.values, y_train.values)
+
+print("\nТОП САМЫХ ВАЖНЫХ ПРИЗНАКОВ:")
+feature_importance = pd.DataFrame({
+    'feature': X_train.columns,
+    'importance': rf.feature_importances_
+}).sort_values('importance', ascending=False)
+
+plt.figure(figsize=(12, 8))
+sns.barplot(data=feature_importance.head(20), x='importance', y='feature')
+plt.title('Топ самых важных признаков Random Forest')
+plt.xlabel('Важность')
+plt.tight_layout()
+plt.show()
+
+print(feature_importance.head(20).to_string(index=False))
+
+print(f"\nАНАЛИЗ РЕШЕНИЯ ДЛЯ ПРЕЦЕНДЕНТА:")
+sample_idx = 0
+sample_data = X_test.iloc[sample_idx]
+sample_prediction = rf.predict(X_test.values[sample_idx].reshape(1, -1))[0]
+
+print(f"Предсказанный доход: {sample_prediction:.2f}")
+
+sample_contributions = []
+for tree in rf.estimators_:
+    path = tree.decision_path(X_test.values[sample_idx].reshape(1, -1))
+    node_indicator = tree.decision_path(X_test.values[sample_idx].reshape(1, -1))
+    leaf_id = tree.apply(X_test.values[sample_idx].reshape(1, -1))
+    
+    for feature in feature_importance.head(10)['feature']:
+        feature_idx = list(X_train.columns).index(feature)
+        if X_test.values[sample_idx, feature_idx] > np.median(X_train[feature]):
+            sample_contributions.append(feature)
+
+from collections import Counter
+top_influential = Counter(sample_contributions).most_common(5)
+
+print("Топ признаков, повлиявших на решение:")
+for feature, count in top_influential:
+    feature_value = sample_data[feature]
+    feature_median = np.median(X_train[feature])
+    comparison = "выше" if feature_value > feature_median else "ниже"
+    print(f"  {feature}: {feature_value:.2f} ({comparison} медианы {feature_median:.2f})")
